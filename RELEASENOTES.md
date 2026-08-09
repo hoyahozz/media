@@ -59,6 +59,8 @@
 *   Text:
 *   Metadata:
 *   Image:
+    *   Fix `ImageRenderer` getting stuck when a tiled image stream contains
+        fewer samples than the image grid's declared tile count.
 *   DataSource:
 *   DRM:
 *   Effect:
@@ -86,6 +88,8 @@
 *   Cronet extension:
 *   RTMP extension:
 *   HLS extension:
+    *   Add support for JPEG trick-play image tracks defined by HLS Image Media
+        Playlists ([#3225](https://github.com/androidx/media/issues/3225)).
     *   Fix calculation of content resume offset when the target segment for
         snapping is not yet in the playlist
         ([#3322](https://github.com/androidx/media/issues/3322)).

@@ -31,6 +31,7 @@ import androidx.media3.common.util.UnstableApi;
 import androidx.media3.exoplayer.analytics.PlayerId;
 import androidx.media3.extractor.Extractor;
 import androidx.media3.extractor.ExtractorInput;
+import androidx.media3.extractor.jpeg.JpegExtractor;
 import androidx.media3.extractor.mp3.Mp3Extractor;
 import androidx.media3.extractor.mp4.FragmentedMp4Extractor;
 import androidx.media3.extractor.text.DefaultSubtitleParserFactory;
@@ -65,6 +66,7 @@ public final class DefaultHlsExtractorFactory implements HlsExtractorFactory {
         FileTypes.AC3,
         FileTypes.AC4,
         FileTypes.MP3,
+        FileTypes.JPEG,
       };
 
   private final @DefaultTsPayloadReaderFactory.Flags int payloadReaderFactoryFlags;
@@ -246,6 +248,8 @@ public final class DefaultHlsExtractorFactory implements HlsExtractorFactory {
         return new Ac4Extractor();
       case FileTypes.MP3:
         return new Mp3Extractor(/* flags= */ 0, /* forcedFirstSampleTimestampUs= */ 0);
+      case FileTypes.JPEG:
+        return new JpegExtractor(JpegExtractor.FLAG_READ_IMAGE);
       case FileTypes.MP4:
         return createFragmentedMp4Extractor(
             subtitleParserFactory,

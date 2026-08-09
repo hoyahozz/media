@@ -27,6 +27,7 @@ import static org.mockito.Mockito.when;
 
 import android.net.Uri;
 import android.os.SystemClock;
+import androidx.annotation.Nullable;
 import androidx.media3.common.C;
 import androidx.media3.common.Format;
 import androidx.media3.common.MimeTypes;
@@ -143,7 +144,8 @@ public final class HlsMediaPeriodTest {
                     Uri.parse("https://variant2"), /* peakBitrate= */ 200000),
                 createAudioOnlyVariant(Uri.parse("https://variant3"), /* peakBitrate= */ 300000),
                 createMuxedVideoAudioVariant(
-                    Uri.parse("https://variant4"), /* peakBitrate= */ 400000)),
+                    Uri.parse("https://variant4"), /* peakBitrate= */ 400000),
+                createImageVariant(Uri.parse("https://images"), /* peakBitrate= */ 12000)),
             /* audios= */ Arrays.asList(
                 createAudioRendition(Uri.parse("https://audio1"), /* language= */ "spa"),
                 createAudioRendition(Uri.parse("https://audio2"), /* language= */ "ger")),
@@ -156,6 +158,28 @@ public final class HlsMediaPeriodTest {
         testMultivariantPlaylistWithoutSubtitles,
         /* periodIndex= */ 0,
         /* ignoredMimeType= */ APPLICATION_ID3);
+
+    Variant imageVariant =
+        createImageVariant(Uri.parse("https://images"), /* peakBitrate= */ 12000);
+    Rendition subtitleRendition =
+        createSubtitleRendition(Uri.parse("https://subtitle"), /* language= */ "spa");
+    HlsMultivariantPlaylist imageAndSubtitleMultivariantPlaylist =
+        createMultivariantPlaylist(
+            /* variants= */ ImmutableList.of(imageVariant),
+            /* audios= */ ImmutableList.of(),
+            /* subtitles= */ ImmutableList.of(subtitleRendition),
+            /* muxedAudioFormat= */ null,
+            /* muxedCaptionFormats= */ ImmutableList.of());
+    MediaPeriodAsserts.assertGetStreamKeysAndManifestFilterIntegration(
+        mediaPeriodFactory,
+        imageAndSubtitleMultivariantPlaylist,
+        /* periodIndex= */ 0,
+        /* ignoredMimeType= */ APPLICATION_ID3);
+    MediaPeriodAsserts.assertTrackGroups(
+        mediaPeriodFactory.createMediaPeriod(imageAndSubtitleMultivariantPlaylist, 0),
+        new TrackGroupArray(
+            new TrackGroup("subtitle:", subtitleRendition.format),
+            new TrackGroup("image", imageVariant.format)));
   }
 
   @Test
@@ -166,7 +190,8 @@ public final class HlsMediaPeriodTest {
                 createMuxedVideoAudioVariant(
                     Uri.parse("https://variant1"), /* peakBitrate= */ 400000),
                 createMuxedVideoAudioVariant(
-                    Uri.parse("https://variant2"), /* peakBitrate= */ 600000)),
+                    Uri.parse("https://variant2"), /* peakBitrate= */ 600000),
+                createImageVariant(Uri.parse("https://images"), /* peakBitrate= */ 12000)),
             /* audios= */ ImmutableList.of(),
             /* subtitles= */ ImmutableList.of(),
             /* muxedAudioFormat= */ createAudioFormat("eng"),
@@ -233,6 +258,17 @@ public final class HlsMediaPeriodTest {
                     .setId("ID3")
                     .setSampleMimeType(APPLICATION_ID3)
                     .setPrimaryTrackGroupId("main")
+                    .build()),
+            new TrackGroup(
+                "image",
+                new Format.Builder()
+                    .setContainerMimeType(MimeTypes.APPLICATION_M3U8)
+                    .setSampleMimeType(MimeTypes.IMAGE_JPEG)
+                    .setCodecs("jpeg")
+                    .setPeakBitrate(12000)
+                    .setWidth(320)
+                    .setHeight(180)
+                    .setRoleFlags(C.ROLE_FLAG_TRICK_PLAY)
                     .build()));
     MediaPeriodAsserts.assertTrackGroups(mediaPeriod, expectedGroups);
 
@@ -272,7 +308,7 @@ public final class HlsMediaPeriodTest {
       List<Variant> variants,
       List<Rendition> audios,
       List<Rendition> subtitles,
-      Format muxedAudioFormat,
+      @Nullable Format muxedAudioFormat,
       List<Format> muxedCaptionFormats) {
     return new HlsMultivariantPlaylist(
         "http://baseUri",
@@ -307,6 +343,20 @@ public final class HlsMediaPeriodTest {
             .setContainerMimeType(MimeTypes.APPLICATION_M3U8)
             .setCodecs("mp4a.40.2")
             .setPeakBitrate(peakBitrate)
+            .build());
+  }
+
+  private static Variant createImageVariant(Uri url, int peakBitrate) {
+    return createVariant(
+        url,
+        new Format.Builder()
+            .setContainerMimeType(MimeTypes.APPLICATION_M3U8)
+            .setSampleMimeType(MimeTypes.IMAGE_JPEG)
+            .setCodecs("jpeg")
+            .setPeakBitrate(peakBitrate)
+            .setWidth(320)
+            .setHeight(180)
+            .setRoleFlags(C.ROLE_FLAG_TRICK_PLAY)
             .build());
   }
 

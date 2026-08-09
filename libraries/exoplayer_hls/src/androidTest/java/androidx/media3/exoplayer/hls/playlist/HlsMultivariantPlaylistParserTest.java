@@ -942,6 +942,50 @@ public class HlsMultivariantPlaylistParserTest {
     assertThat(playlist.variants.get(1).format.selectionPriority).isEqualTo(4.5f);
   }
 
+  @Test
+  public void parseMultivariantPlaylist_withImageStreamInf_exposesImageTrickPlayVariant()
+      throws IOException {
+    String playlistString =
+        "#EXTM3U\n"
+            + "#EXT-X-IMAGE-STREAM-INF:BANDWIDTH=12000,CODECS=\"jpeg\","
+            + "RESOLUTION=320x180,URI=\"images/index.m3u8\"\n"
+            + "#EXT-X-STREAM-INF:BANDWIDTH=1280000,CODECS=\"avc1.66.30\","
+            + "RESOLUTION=1280x720\n"
+            + "video/index.m3u8\n";
+
+    HlsMultivariantPlaylist playlist = parseMultivariantPlaylist(PLAYLIST_URI, playlistString);
+
+    assertThat(playlist.variants).hasSize(2);
+    assertThat(playlist.variants.get(0).url)
+        .isEqualTo(Uri.parse("https://example.com/video/index.m3u8"));
+    Variant imageVariant = playlist.variants.get(1);
+    assertThat(imageVariant.url).isEqualTo(Uri.parse("https://example.com/images/index.m3u8"));
+    assertThat(imageVariant.format.sampleMimeType).isEqualTo(MimeTypes.IMAGE_JPEG);
+    assertThat(imageVariant.format.codecs).isEqualTo("jpeg");
+    assertThat(imageVariant.format.peakBitrate).isEqualTo(12000);
+    assertThat(imageVariant.format.width).isEqualTo(320);
+    assertThat(imageVariant.format.height).isEqualTo(180);
+    assertThat(imageVariant.format.roleFlags & C.ROLE_FLAG_TRICK_PLAY)
+        .isEqualTo(C.ROLE_FLAG_TRICK_PLAY);
+  }
+
+  @Test
+  public void parseMultivariantPlaylist_withUnsupportedImageCodec_ignoresImageVariant()
+      throws IOException {
+    String playlistString =
+        "#EXTM3U\n"
+            + "#EXT-X-STREAM-INF:BANDWIDTH=1280000,CODECS=\"avc1.66.30\"\n"
+            + "video/index.m3u8\n"
+            + "#EXT-X-IMAGE-STREAM-INF:BANDWIDTH=12000,CODECS=\"png\","
+            + "RESOLUTION=320x180,URI=\"images/index.m3u8\"\n";
+
+    HlsMultivariantPlaylist playlist = parseMultivariantPlaylist(PLAYLIST_URI, playlistString);
+
+    assertThat(playlist.variants).hasSize(1);
+    assertThat(playlist.variants.get(0).url)
+        .isEqualTo(Uri.parse("https://example.com/video/index.m3u8"));
+  }
+
   private static Metadata createExtXStreamInfMetadata(HlsTrackMetadataEntry.VariantInfo... infos) {
     return new Metadata(
         new HlsTrackMetadataEntry(/* groupId= */ null, /* name= */ null, Arrays.asList(infos)));

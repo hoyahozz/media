@@ -29,6 +29,7 @@ import android.net.Uri;
 import android.os.Handler;
 import android.util.SparseIntArray;
 import androidx.annotation.Nullable;
+import androidx.annotation.VisibleForTesting;
 import androidx.media3.common.C;
 import androidx.media3.common.DataReader;
 import androidx.media3.common.DrmInitData;
@@ -134,7 +135,11 @@ import org.checkerframework.checker.nullness.qual.RequiresNonNull;
   private static final Set<Integer> MAPPABLE_TYPES =
       Collections.unmodifiableSet(
           new HashSet<>(
-              Arrays.asList(C.TRACK_TYPE_AUDIO, C.TRACK_TYPE_VIDEO, C.TRACK_TYPE_METADATA)));
+              Arrays.asList(
+                  C.TRACK_TYPE_AUDIO,
+                  C.TRACK_TYPE_VIDEO,
+                  C.TRACK_TYPE_IMAGE,
+                  C.TRACK_TYPE_METADATA)));
 
   private final String uid;
   private final @C.TrackType int trackType;
@@ -709,7 +714,7 @@ import org.checkerframework.checker.nullness.qual.RequiresNonNull;
             chunkIndex < mediaChunks.size()
                 ? mediaChunks.get(chunkIndex).trackFormat
                 : checkNotNull(upstreamTrackFormat);
-        format = format.withManifestFormatInfo(trackFormat);
+        format = withManifestFormatInfoPreservingImageTiles(format, trackFormat);
       }
       formatHolder.format = format;
     }
@@ -1146,7 +1151,8 @@ import org.checkerframework.checker.nullness.qual.RequiresNonNull;
    *
    * @param chunk The media chunk that's about to start loading.
    */
-  private void initMediaChunkLoad(HlsMediaChunk chunk) {
+  @VisibleForTesting(otherwise = VisibleForTesting.PRIVATE)
+  void initMediaChunkLoad(HlsMediaChunk chunk) {
     sourceChunk = chunk;
     upstreamTrackFormat = chunk.trackFormat;
     pendingResetPositionUs = C.TIME_UNSET;
@@ -1224,6 +1230,13 @@ import org.checkerframework.checker.nullness.qual.RequiresNonNull;
       return emsgUnwrappingTrackOutput;
     }
     return trackOutput;
+  }
+
+  /** Returns the existing track output for {@code type}, or {@code null} if none exists. */
+  @Nullable
+  public TrackOutput getTrackOutputByType(@C.TrackType int type) {
+    int sampleQueueIndex = sampleQueueIndicesByType.get(type, C.INDEX_UNSET);
+    return sampleQueueIndex == C.INDEX_UNSET ? null : sampleQueues[sampleQueueIndex];
   }
 
   /**
@@ -1526,6 +1539,8 @@ import org.checkerframework.checker.nullness.qual.RequiresNonNull;
         trackType = C.TRACK_TYPE_AUDIO;
       } else if (MimeTypes.isText(sampleMimeType)) {
         trackType = C.TRACK_TYPE_TEXT;
+      } else if (MimeTypes.isImage(sampleMimeType)) {
+        trackType = C.TRACK_TYPE_IMAGE;
       } else {
         trackType = C.TRACK_TYPE_NONE;
       }
@@ -1566,7 +1581,7 @@ import org.checkerframework.checker.nullness.qual.RequiresNonNull;
           // the fields that will be the same for all variants.
           formats[j] =
               chunkSourceTrackCount == 1
-                  ? sampleFormat.withManifestFormatInfo(playlistFormat)
+                  ? withManifestFormatInfoPreservingImageTiles(sampleFormat, playlistFormat)
                   : deriveFormat(playlistFormat, sampleFormat, /* propagateBitrates= */ true);
         }
         trackGroups[i] = new TrackGroup(uid, formats);
@@ -1671,10 +1686,29 @@ import org.checkerframework.checker.nullness.qual.RequiresNonNull;
       case C.TRACK_TYPE_AUDIO:
         return 2;
       case C.TRACK_TYPE_TEXT:
+      case C.TRACK_TYPE_IMAGE:
         return 1;
       default:
         return 0;
     }
+  }
+
+  private static Format withManifestFormatInfoPreservingImageTiles(
+      Format sampleFormat, Format manifestFormat) {
+    Format mergedFormat = sampleFormat.withManifestFormatInfo(manifestFormat);
+    if (!MimeTypes.isImage(mergedFormat.sampleMimeType)
+        || (manifestFormat.tileCountHorizontal != Format.NO_VALUE
+            && manifestFormat.tileCountVertical != Format.NO_VALUE)) {
+      return mergedFormat;
+    }
+    Format.Builder formatBuilder = mergedFormat.buildUpon();
+    if (manifestFormat.tileCountHorizontal == Format.NO_VALUE) {
+      formatBuilder.setTileCountHorizontal(sampleFormat.tileCountHorizontal);
+    }
+    if (manifestFormat.tileCountVertical == Format.NO_VALUE) {
+      formatBuilder.setTileCountVertical(sampleFormat.tileCountVertical);
+    }
+    return formatBuilder.build();
   }
 
   /**

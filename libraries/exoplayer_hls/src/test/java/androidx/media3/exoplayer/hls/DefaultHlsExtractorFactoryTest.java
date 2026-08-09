@@ -24,11 +24,14 @@ import androidx.media3.common.util.TimestampAdjuster;
 import androidx.media3.exoplayer.analytics.PlayerId;
 import androidx.media3.extractor.DefaultExtractorsFactory;
 import androidx.media3.extractor.ExtractorInput;
+import androidx.media3.extractor.SingleSampleExtractor;
+import androidx.media3.extractor.jpeg.JpegExtractor;
 import androidx.media3.extractor.mp3.Mp3Extractor;
 import androidx.media3.extractor.mp4.FragmentedMp4Extractor;
 import androidx.media3.extractor.ts.Ac3Extractor;
 import androidx.media3.extractor.ts.TsExtractor;
 import androidx.media3.test.utils.FakeExtractorInput;
+import androidx.media3.test.utils.FakeExtractorOutput;
 import androidx.media3.test.utils.TestUtil;
 import androidx.test.core.app.ApplicationProvider;
 import androidx.test.ext.junit.runners.AndroidJUnit4;
@@ -256,5 +259,48 @@ public class DefaultHlsExtractorFactoryTest {
     // There's no information for inferring the file type, we expect the factory to fall back on
     // Transport Stream.
     assertThat(result.extractor.getClass()).isEqualTo(TsExtractor.class);
+  }
+
+  @Test
+  public void createExtractor_withJpegFormat_preservesImageTileFormatWhenRecreated()
+      throws Exception {
+    Format imageFormat =
+        new Format.Builder()
+            .setSampleMimeType(MimeTypes.IMAGE_JPEG)
+            .setWidth(160)
+            .setHeight(90)
+            .setTileCountHorizontal(3)
+            .setTileCountVertical(2)
+            .build();
+    ExtractorInput jpegExtractorInput =
+        new FakeExtractorInput.Builder().setData(new byte[] {(byte) 0xFF, (byte) 0xD8}).build();
+
+    BundledHlsMediaChunkExtractor extractor =
+        new DefaultHlsExtractorFactory()
+            .createExtractor(
+                URI_WITH_JPEG_EXTENSION,
+                imageFormat,
+                /* muxedCaptionFormats= */ null,
+                timestampAdjuster,
+                /* responseHeaders= */ ImmutableMap.of(),
+                jpegExtractorInput,
+                PlayerId.UNSET);
+
+    assertThat(extractor.extractor).isInstanceOf(JpegExtractor.class);
+    FakeExtractorOutput firstOutput = new FakeExtractorOutput();
+    extractor.init(firstOutput);
+    Format firstOutputFormat =
+        firstOutput.trackOutputs.get(SingleSampleExtractor.IMAGE_TRACK_ID).lastFormat;
+    assertThat(firstOutputFormat.width).isEqualTo(160);
+    assertThat(firstOutputFormat.height).isEqualTo(90);
+    assertThat(firstOutputFormat.tileCountHorizontal).isEqualTo(3);
+    assertThat(firstOutputFormat.tileCountVertical).isEqualTo(2);
+
+    HlsMediaChunkExtractor recreatedExtractor = extractor.recreate();
+    FakeExtractorOutput recreatedOutput = new FakeExtractorOutput();
+    recreatedExtractor.init(recreatedOutput);
+    Format recreatedOutputFormat =
+        recreatedOutput.trackOutputs.get(SingleSampleExtractor.IMAGE_TRACK_ID).lastFormat;
+    assertThat(recreatedOutputFormat).isEqualTo(firstOutputFormat);
   }
 }

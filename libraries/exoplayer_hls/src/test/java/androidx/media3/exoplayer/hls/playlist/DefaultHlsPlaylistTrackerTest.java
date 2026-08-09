@@ -166,6 +166,70 @@ public class DefaultHlsPlaylistTrackerTest {
   }
 
   @Test
+  public void getImagePlaylistSnapshot_forPlayback_keepsAudioVideoPlaylistPrimary()
+      throws Exception {
+    String multivariantPlaylist =
+        "#EXTM3U\n"
+            + "#EXT-X-IMAGE-STREAM-INF:BANDWIDTH=12000,CODECS=\"jpeg\","
+            + "RESOLUTION=320x180,URI=\"images.m3u8\"\n"
+            + "#EXT-X-STREAM-INF:BANDWIDTH=1280000,CODECS=\"avc1.66.30\","
+            + "RESOLUTION=1280x720\n"
+            + "video.m3u8\n";
+    String videoPlaylist =
+        "#EXTM3U\n"
+            + "#EXT-X-TARGETDURATION:6\n"
+            + "#EXTINF:6,\n"
+            + "segment.ts\n"
+            + "#EXT-X-ENDLIST\n";
+    String imagePlaylist =
+        "#EXTM3U\n"
+            + "#EXT-X-IMAGES-ONLY\n"
+            + "#EXT-X-TARGETDURATION:6\n"
+            + "#EXTINF:6,\n"
+            + "image.jpg\n"
+            + "#EXT-X-ENDLIST\n";
+    List<HttpUrl> httpUrls =
+        enqueueWebServerResponses(
+            new String[] {"/master.m3u8", "/video.m3u8", "/images.m3u8"},
+            new MockResponse().setResponseCode(200).setBody(multivariantPlaylist),
+            new MockResponse().setResponseCode(200).setBody(videoPlaylist),
+            new MockResponse().setResponseCode(200).setBody(imagePlaylist));
+    DefaultHlsPlaylistTracker playlistTracker =
+        new DefaultHlsPlaylistTracker(
+            dataType -> new DefaultHttpDataSource.Factory().createDataSource(),
+            new DefaultLoadErrorHandlingPolicy(),
+            new DefaultHlsPlaylistParserFactory(),
+            /* cmcdConfiguration= */ null,
+            /* downloadExecutorSupplier= */ null);
+    Uri videoPlaylistUri = Uri.parse(mockWebServer.url("/video.m3u8").toString());
+    Uri imagePlaylistUri = Uri.parse(mockWebServer.url("/images.m3u8").toString());
+    AtomicReference<HlsMediaPlaylist> primaryPlaylistSnapshot = new AtomicReference<>();
+    AtomicInteger primaryPlaylistRefreshCount = new AtomicInteger();
+
+    playlistTracker.start(
+        Uri.parse(mockWebServer.url("/master.m3u8").toString()),
+        new MediaSourceEventListener.EventDispatcher(),
+        playlist -> {
+          primaryPlaylistSnapshot.set(playlist);
+          primaryPlaylistRefreshCount.incrementAndGet();
+        },
+        BandwidthMeter.NO_OP);
+    RobolectricUtil.runMainLooperUntil(() -> playlistTracker.isSnapshotValid(videoPlaylistUri));
+    assertThat(primaryPlaylistSnapshot.get().segments.get(0).url).isEqualTo("segment.ts");
+    assertThat(primaryPlaylistRefreshCount.get()).isEqualTo(1);
+
+    playlistTracker.refreshPlaylist(imagePlaylistUri);
+    RobolectricUtil.runMainLooperUntil(() -> playlistTracker.isSnapshotValid(imagePlaylistUri));
+    assertThat(playlistTracker.getPlaylistSnapshot(imagePlaylistUri, /* isForPlayback= */ true))
+        .isNotNull();
+
+    assertThat(primaryPlaylistSnapshot.get().segments.get(0).url).isEqualTo("segment.ts");
+    assertThat(primaryPlaylistRefreshCount.get()).isEqualTo(1);
+    playlistTracker.stop();
+    assertRequestUrlsCalled(httpUrls);
+  }
+
+  @Test
   public void start_playlistCanNotSkip_requestsFullUpdate()
       throws IOException, TimeoutException, InterruptedException {
     List<HttpUrl> httpUrls =

@@ -56,6 +56,97 @@ import org.junit.runner.RunWith;
 public class HlsMediaPlaylistParserTest {
 
   @Test
+  public void parseMediaPlaylist_withImageTiles_parsesImageInfoForNextSegment() throws Exception {
+    Uri playlistUri = Uri.parse("https://example.com/images.m3u8");
+    String playlistString =
+        "#EXTM3U\n"
+            + "#EXT-X-TARGETDURATION:6\n"
+            + "#EXT-X-TILES:RESOLUTION=160x90,LAYOUT=3x2,DURATION=1.001\n"
+            + "#EXTINF:5.5,\n"
+            + "grid.jpg\n"
+            + "#EXT-X-IMAGES-ONLY\n"
+            + "#EXTINF:2.0,\n"
+            + "single.jpg\n"
+            + "#EXT-X-ENDLIST\n";
+
+    HlsMediaPlaylist playlist =
+        (HlsMediaPlaylist)
+            new HlsPlaylistParser()
+                .parse(playlistUri, new ByteArrayInputStream(Util.getUtf8Bytes(playlistString)));
+
+    assertThat(playlist.segments).hasSize(2);
+    HlsMediaPlaylist.ImageInfo imageInfo = playlist.segments.get(0).imageInfo;
+    assertThat(imageInfo)
+        .isEqualTo(
+            new HlsMediaPlaylist.ImageInfo(
+                /* tileWidth= */ 160,
+                /* tileHeight= */ 90,
+                /* tileCountHorizontal= */ 3,
+                /* tileCountVertical= */ 2,
+                /* tileDurationUs= */ 1_001_000L));
+    assertThat(playlist.segments.get(1).imageInfo).isNull();
+  }
+
+  @Test
+  public void parseMediaPlaylist_withImageTilesButNoImagesOnlyTag_ignoresImageInfo()
+      throws Exception {
+    Uri playlistUri = Uri.parse("https://example.com/video.m3u8");
+    String playlistString =
+        "#EXTM3U\n"
+            + "#EXT-X-TARGETDURATION:6\n"
+            + "#EXT-X-TILES:RESOLUTION=160x90,LAYOUT=3x2,DURATION=1\n"
+            + "#EXTINF:5.5,\n"
+            + "segment.ts\n"
+            + "#EXT-X-ENDLIST\n";
+
+    HlsMediaPlaylist playlist =
+        (HlsMediaPlaylist)
+            new HlsPlaylistParser()
+                .parse(playlistUri, new ByteArrayInputStream(Util.getUtf8Bytes(playlistString)));
+
+    assertThat(playlist.segments).hasSize(1);
+    assertThat(playlist.segments.get(0).imageInfo).isNull();
+  }
+
+  @Test
+  public void parseMediaPlaylist_withOverflowingImageTileAttribute_throwsParserException() {
+    Uri playlistUri = Uri.parse("https://example.com/images.m3u8");
+    String playlistString =
+        "#EXTM3U\n"
+            + "#EXT-X-IMAGES-ONLY\n"
+            + "#EXT-X-TARGETDURATION:6\n"
+            + "#EXT-X-TILES:RESOLUTION=99999999999999999999x90,LAYOUT=3x2,DURATION=1\n"
+            + "#EXTINF:5.5,\n"
+            + "grid.jpg\n"
+            + "#EXT-X-ENDLIST\n";
+
+    assertThrows(
+        ParserException.class,
+        () ->
+            new HlsPlaylistParser()
+                .parse(playlistUri, new ByteArrayInputStream(Util.getUtf8Bytes(playlistString))));
+  }
+
+  @Test
+  public void parseMediaPlaylist_withMalformedImageTileDuration_throwsParserException() {
+    Uri playlistUri = Uri.parse("https://example.com/images.m3u8");
+    String playlistString =
+        "#EXTM3U\n"
+            + "#EXT-X-IMAGES-ONLY\n"
+            + "#EXT-X-TARGETDURATION:6\n"
+            + "#EXT-X-TILES:RESOLUTION=160x90,LAYOUT=3x2,DURATION=1.2.3\n"
+            + "#EXTINF:5.5,\n"
+            + "grid.jpg\n"
+            + "#EXT-X-ENDLIST\n";
+
+    assertThrows(
+        ParserException.class,
+        () ->
+            new HlsPlaylistParser()
+                .parse(playlistUri, new ByteArrayInputStream(Util.getUtf8Bytes(playlistString))));
+  }
+
+  @Test
   public void parseMediaPlaylist() throws Exception {
     Uri playlistUri = Uri.parse("https://example.com/test.m3u8");
     String playlistString =

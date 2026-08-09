@@ -212,12 +212,18 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
     // See HlsMultivariantPlaylist.copy for interpretation of StreamKeys.
     HlsMultivariantPlaylist multivariantPlaylist =
         checkNotNull(playlistTracker.getMultivariantPlaylist());
-    boolean hasVariants = !multivariantPlaylist.variants.isEmpty();
-    int audioWrapperOffset = hasVariants ? 1 : 0;
+    boolean hasAudioVideoVariants = false;
+    for (int i = 0; i < multivariantPlaylist.variants.size(); i++) {
+      if (!MimeTypes.isImage(multivariantPlaylist.variants.get(i).format.sampleMimeType)) {
+        hasAudioVideoVariants = true;
+        break;
+      }
+    }
+    int audioWrapperOffset = hasAudioVideoVariants ? 1 : 0;
 
     @Nullable HlsSampleStreamWrapper mainWrapper;
     @Nullable TrackGroupArray mainWrapperTrackGroups;
-    if (hasVariants) {
+    if (hasAudioVideoVariants) {
       mainWrapper = sampleStreamWrappers[0];
       mainWrapperTrackGroups = mainWrapper.getTrackGroups();
     } else {
@@ -256,7 +262,7 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
           needsPrimaryTrackGroupSelection = true;
         }
       } else {
-        // Audio or subtitle group.
+        // Audio, image or subtitle group.
         for (int i = audioWrapperOffset; i < sampleStreamWrappers.length; i++) {
           HlsSampleStreamWrapper wrapper = sampleStreamWrappers[i];
           TrackGroupArray wrapperTrackGroups = sampleStreamWrappers[i].getTrackGroups();
@@ -264,10 +270,19 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
           if (selectedTrackGroupIndex != C.INDEX_UNSET) {
             if (selectedTrackGroupIndex == wrapper.getPrimaryTrackGroupIndex()) {
               // Primary group in the rendition wrapper.
-              int groupIndexType =
-                  wrapperTrackGroups.get(selectedTrackGroupIndex).type == C.TRACK_TYPE_AUDIO
-                      ? HlsMultivariantPlaylist.GROUP_INDEX_AUDIO
-                      : HlsMultivariantPlaylist.GROUP_INDEX_SUBTITLE;
+              @C.TrackType int trackType = wrapperTrackGroups.get(selectedTrackGroupIndex).type;
+              int groupIndexType;
+              switch (trackType) {
+                case C.TRACK_TYPE_AUDIO:
+                  groupIndexType = HlsMultivariantPlaylist.GROUP_INDEX_AUDIO;
+                  break;
+                case C.TRACK_TYPE_IMAGE:
+                  groupIndexType = HlsMultivariantPlaylist.GROUP_INDEX_VARIANT;
+                  break;
+                default:
+                  groupIndexType = HlsMultivariantPlaylist.GROUP_INDEX_SUBTITLE;
+                  break;
+              }
               ImmutableList<HlsRedundantGroup> wrapperRedundantGroups =
                   wrapper.getRedundantGroups();
               for (int trackIndex = 0; trackIndex < trackSelection.length(); trackIndex++) {
@@ -285,7 +300,9 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
         }
       }
     }
-    if (hasVariants && needsPrimaryTrackGroupSelection && !hasPrimaryTrackGroupSelection) {
+    if (hasAudioVideoVariants
+        && needsPrimaryTrackGroupSelection
+        && !hasPrimaryTrackGroupSelection) {
       // A track selection includes a variant-embedded track, but no variant is added yet. We use
       // the valid variant with the lowest bitrate to reduce overhead.
       ImmutableList<HlsRedundantGroup> mainWrapperRedundantGroups =
@@ -380,7 +397,7 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
         if (newEnabledSampleStreamWrapperCount++ == 0) {
           // The first enabled wrapper is always allowed to initialize timestamp adjusters. Note
           // that the first wrapper will correspond to a variant, or else an audio rendition, or
-          // else a text rendition, in that order.
+          // else a text rendition, or else an image variant, in that order.
           sampleStreamWrapper.setIsPrimaryTimestampSource(true);
           if (wasReset
               || enabledSampleStreamWrappers.length == 0
@@ -531,18 +548,28 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
             : Collections.emptyMap();
     List<HlsRedundantGroup> variantRedundantGroups =
         checkNotNull(playlistTracker.getRedundantGroups(HlsRedundantGroup.VARIANT));
+    ArrayList<HlsRedundantGroup> imageVariantRedundantGroups = new ArrayList<>();
+    ArrayList<HlsRedundantGroup> audioVideoVariantRedundantGroups = new ArrayList<>();
+    for (int i = 0; i < variantRedundantGroups.size(); i++) {
+      HlsRedundantGroup redundantGroup = variantRedundantGroups.get(i);
+      if (MimeTypes.isImage(redundantGroup.groupKey.format.sampleMimeType)) {
+        imageVariantRedundantGroups.add(redundantGroup);
+      } else {
+        audioVideoVariantRedundantGroups.add(redundantGroup);
+      }
+    }
     List<HlsRedundantGroup> audioRedundantGroups =
         checkNotNull(playlistTracker.getRedundantGroups(HlsRedundantGroup.AUDIO_RENDITION));
     List<HlsRedundantGroup> subtitleRedundantGroups =
         checkNotNull(playlistTracker.getRedundantGroups(HlsRedundantGroup.SUBTITLE_RENDITION));
-    boolean hasVariants = !variantRedundantGroups.isEmpty();
+    boolean hasAudioVideoVariants = !audioVideoVariantRedundantGroups.isEmpty();
 
     pendingPrepareCount = 0;
     ArrayList<HlsSampleStreamWrapper> sampleStreamWrappers = new ArrayList<>();
 
-    if (hasVariants) {
+    if (hasAudioVideoVariants) {
       buildAndPrepareMainSampleStreamWrapper(
-          variantRedundantGroups,
+          audioVideoVariantRedundantGroups,
           audioRedundantGroups,
           multivariantPlaylist.muxedAudioFormat,
           multivariantPlaylist.muxedCaptionFormats,
@@ -561,17 +588,61 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
     buildAndPrepareSubtitleSampleStreamWrappers(
         positionUs, subtitleRedundantGroups, sampleStreamWrappers, overridingDrmInitData);
 
+    int imageSampleStreamWrapperOffset = sampleStreamWrappers.size();
+    buildAndPrepareImageSampleStreamWrapper(
+        positionUs, imageVariantRedundantGroups, sampleStreamWrappers, overridingDrmInitData);
+
     this.sampleStreamWrappers = sampleStreamWrappers.toArray(new HlsSampleStreamWrapper[0]);
     pendingPrepareCount = this.sampleStreamWrappers.length;
     // Set primary timestamp source and trigger preparation (if not already prepared)
     for (int i = 0; i < audioVideoSampleStreamWrapperCount; i++) {
       this.sampleStreamWrappers[i].setIsPrimaryTimestampSource(true);
     }
+    if (audioVideoSampleStreamWrapperCount == 0
+        && imageSampleStreamWrapperOffset > 0
+        && this.sampleStreamWrappers.length > imageSampleStreamWrapperOffset) {
+      // A timestamp-bearing text wrapper must initialize the shared adjuster before image
+      // wrappers. Images have no container timestamps and use their segment start directly.
+      this.sampleStreamWrappers[0].setIsPrimaryTimestampSource(true);
+    }
     for (HlsSampleStreamWrapper sampleStreamWrapper : this.sampleStreamWrappers) {
       sampleStreamWrapper.continuePreparing();
     }
     // All wrappers are enabled during preparation.
     enabledSampleStreamWrappers = this.sampleStreamWrappers;
+  }
+
+  private void buildAndPrepareImageSampleStreamWrapper(
+      long positionUs,
+      List<HlsRedundantGroup> imageVariantRedundantGroups,
+      List<HlsSampleStreamWrapper> sampleStreamWrappers,
+      Map<String, DrmInitData> overridingDrmInitData) {
+    if (imageVariantRedundantGroups.isEmpty()) {
+      return;
+    }
+    String sampleStreamWrapperUid = "image";
+    HlsRedundantGroup[] redundantGroups =
+        imageVariantRedundantGroups.toArray(Util.castNonNullTypeArray(new HlsRedundantGroup[0]));
+    Format[] formats = new Format[redundantGroups.length];
+    for (int i = 0; i < redundantGroups.length; i++) {
+      formats[i] = redundantGroups[i].groupKey.format;
+    }
+    HlsSampleStreamWrapper sampleStreamWrapper =
+        buildSampleStreamWrapper(
+            sampleStreamWrapperUid,
+            C.TRACK_TYPE_IMAGE,
+            redundantGroups,
+            formats,
+            /* muxedAudioFormat= */ null,
+            /* muxedCaptionFormats= */ ImmutableList.of(),
+            overridingDrmInitData,
+            positionUs);
+    sampleStreamWrappers.add(sampleStreamWrapper);
+    if (allowChunklessPreparation) {
+      sampleStreamWrapper.prepareWithMultivariantPlaylistInfo(
+          new TrackGroup[] {new TrackGroup(sampleStreamWrapperUid, formats)},
+          /* primaryTrackGroupIndex= */ 0);
+    }
   }
 
   /**

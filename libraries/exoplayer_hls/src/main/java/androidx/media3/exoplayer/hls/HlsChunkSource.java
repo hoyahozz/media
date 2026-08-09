@@ -228,6 +228,13 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
         initialTrackSelection.add(i);
       }
     }
+    if (initialTrackSelection.isEmpty()) {
+      // A dedicated trick-play wrapper, such as an image playlist wrapper, has no regular variant
+      // to initialize with. In this case all of its tracks are valid initial selections.
+      for (int i = 0; i < redundantGroups.length; i++) {
+        initialTrackSelection.add(i);
+      }
+    }
     trackSelection =
         new InitializationTrackSelection(trackGroup, Ints.toArray(initialTrackSelection));
   }

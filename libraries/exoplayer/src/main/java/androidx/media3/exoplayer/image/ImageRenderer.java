@@ -303,10 +303,20 @@ public class ImageRenderer extends BaseRenderer {
    */
   private boolean drainOutput(long positionUs, long elapsedRealtimeUs)
       throws ImageDecoderException, ExoPlaybackException {
+    if (tileInfo != null && tileInfo.requiresNewBitmap()) {
+      outputBitmap = null;
+      tileInfo.onNewBitmapRequested();
+    }
     // If tileInfo and outputBitmap are both null, we must not return early. The EOS may have been
     // queued to the decoder, and we must stay in this method to deque it further down.
     if (outputBitmap != null && tileInfo == null) {
-      return false;
+      if (inputStreamEnded) {
+        // A grid may end before its declared tile count is exhausted. Release the final grid image
+        // so the decoder's EOS output can be dequeued.
+        outputBitmap = null;
+      } else {
+        return false;
+      }
     }
     if (firstFrameState == FIRST_FRAME_NOT_RENDERED_ONLY_ALLOWED_IF_STARTED
         && getState() != STATE_STARTED) {
@@ -574,7 +584,11 @@ public class ImageRenderer extends BaseRenderer {
       readyToOutputTiles = true;
       return;
     }
-    nextTileInfo = new TileInfo(currentTileIndex, inputBuffer.timeUs);
+    nextTileInfo =
+        new TileInfo(
+            currentTileIndex,
+            inputBuffer.timeUs,
+            /* requiresNewBitmap= */ currentTileIndex == 0);
     currentTileIndex++;
     // TODO: b/319484746 - ImageRenderer should consider startPositionUs when choosing to output an
     // image.
@@ -622,11 +636,13 @@ public class ImageRenderer extends BaseRenderer {
   private static class TileInfo {
     private final int tileIndex;
     private final long presentationTimeUs;
+    private boolean requiresNewBitmap;
     private @MonotonicNonNull Bitmap tileBitmap;
 
-    public TileInfo(int tileIndex, long presentationTimeUs) {
+    public TileInfo(int tileIndex, long presentationTimeUs, boolean requiresNewBitmap) {
       this.tileIndex = tileIndex;
       this.presentationTimeUs = presentationTimeUs;
+      this.requiresNewBitmap = requiresNewBitmap;
     }
 
     public int getTileIndex() {
@@ -647,6 +663,15 @@ public class ImageRenderer extends BaseRenderer {
 
     public boolean hasTileBitmap() {
       return tileBitmap != null;
+    }
+
+    public boolean requiresNewBitmap() {
+      return requiresNewBitmap;
+    }
+
+    public void onNewBitmapRequested() {
+      // Clear the one-shot request because rendering may defer this tile and re-enter drainOutput.
+      requiresNewBitmap = false;
     }
   }
 

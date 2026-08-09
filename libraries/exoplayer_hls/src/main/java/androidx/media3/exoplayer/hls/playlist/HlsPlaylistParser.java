@@ -27,6 +27,7 @@ import static com.google.common.base.Preconditions.checkState;
 import android.net.Uri;
 import android.text.TextUtils;
 import android.util.Base64;
+import android.util.SparseArray;
 import androidx.annotation.Nullable;
 import androidx.media3.common.C;
 import androidx.media3.common.ColorInfo;
@@ -94,7 +95,10 @@ public final class HlsPlaylistParser implements ParsingLoadable.Parser<HlsPlayli
   private static final String TAG_PART_INF = "#EXT-X-PART-INF";
   private static final String TAG_PART = "#EXT-X-PART";
   private static final String TAG_I_FRAME_STREAM_INF = "#EXT-X-I-FRAME-STREAM-INF";
+  private static final String TAG_IMAGE_STREAM_INF = "#EXT-X-IMAGE-STREAM-INF";
   private static final String TAG_IFRAME = "#EXT-X-I-FRAMES-ONLY";
+  private static final String TAG_IMAGES_ONLY = "#EXT-X-IMAGES-ONLY";
+  private static final String TAG_TILES = "#EXT-X-TILES";
   private static final String TAG_MEDIA = "#EXT-X-MEDIA";
   private static final String TAG_TARGET_DURATION = "#EXT-X-TARGETDURATION";
   private static final String TAG_DISCONTINUITY = "#EXT-X-DISCONTINUITY";
@@ -164,6 +168,7 @@ public final class HlsPlaylistParser implements ParsingLoadable.Parser<HlsPlayli
   private static final Pattern REGEX_SUPPLEMENTAL_CODECS =
       Pattern.compile("SUPPLEMENTAL-CODECS=" + ATTR_QUOTED_STRING_VALUE_PATTERN);
   private static final Pattern REGEX_RESOLUTION = Pattern.compile("RESOLUTION=(\\d+x\\d+)");
+  private static final Pattern REGEX_LAYOUT = Pattern.compile("LAYOUT=(\\d+x\\d+)");
   private static final Pattern REGEX_FRAME_RATE = Pattern.compile("FRAME-RATE=([\\d\\.]+)\\b");
   private static final Pattern REGEX_SCORE = Pattern.compile("SCORE=([\\d\\.]+)\\b");
   private static final Pattern REGEX_SERVER_URI =
@@ -353,7 +358,7 @@ public final class HlsPlaylistParser implements ParsingLoadable.Parser<HlsPlayli
         line = line.trim();
         if (line.isEmpty()) {
           // Do nothing.
-        } else if (line.startsWith(TAG_STREAM_INF)) {
+        } else if (line.startsWith(TAG_STREAM_INF) || line.startsWith(TAG_IMAGE_STREAM_INF)) {
           extraLines.add(line);
           return parseMultivariantPlaylist(new LineIterator(extraLines, reader), uri, matcherCache);
         } else if (line.startsWith(TAG_TARGET_DURATION)
@@ -361,6 +366,7 @@ public final class HlsPlaylistParser implements ParsingLoadable.Parser<HlsPlayli
             || line.startsWith(TAG_MEDIA_DURATION)
             || line.startsWith(TAG_KEY)
             || line.startsWith(TAG_BYTERANGE)
+            || line.equals(TAG_IMAGES_ONLY)
             || line.equals(TAG_DISCONTINUITY)
             || line.equals(TAG_DISCONTINUITY_SEQUENCE)
             || line.equals(TAG_ENDLIST)) {
@@ -441,6 +447,7 @@ public final class HlsPlaylistParser implements ParsingLoadable.Parser<HlsPlayli
     HashMap<Uri, ArrayList<VariantInfo>> urlToVariantInfos = new HashMap<>();
     HashMap<String, String> variableDefinitions = new HashMap<>();
     ArrayList<Variant> variants = new ArrayList<>();
+    ArrayList<Variant> imageVariants = new ArrayList<>();
     ArrayList<Rendition> videos = new ArrayList<>();
     ArrayList<Rendition> audios = new ArrayList<>();
     ArrayList<Rendition> subtitles = new ArrayList<>();
@@ -462,7 +469,9 @@ public final class HlsPlaylistParser implements ParsingLoadable.Parser<HlsPlayli
         // We expose all tags through the playlist.
         tags.add(line);
       }
+      boolean isRegularVariant = line.startsWith(TAG_STREAM_INF);
       boolean isIFrameOnlyVariant = line.startsWith(TAG_I_FRAME_STREAM_INF);
+      boolean isImageVariant = line.startsWith(TAG_IMAGE_STREAM_INF);
 
       if (line.startsWith(TAG_DEFINE)) {
         @Nullable
@@ -515,15 +524,28 @@ public final class HlsPlaylistParser implements ParsingLoadable.Parser<HlsPlayli
         String pathwayId =
             parseOptionalStringAttr(line, REGEX_PATHWAY_ID, variableDefinitions, matcherCache);
         contentSteeringInfo = new ContentSteeringInfo(serverUri, pathwayId);
-      } else if (line.startsWith(TAG_STREAM_INF) || isIFrameOnlyVariant) {
-        noClosedCaptions |= line.contains(ATTR_CLOSED_CAPTIONS_NONE);
-        int roleFlags = isIFrameOnlyVariant ? C.ROLE_FLAG_TRICK_PLAY : 0;
-        int peakBitrate = parseIntAttr(line, REGEX_BANDWIDTH, matcherCache);
+      } else if (isRegularVariant || isIFrameOnlyVariant || isImageVariant) {
+        boolean hasNoClosedCaptions = line.contains(ATTR_CLOSED_CAPTIONS_NONE);
+        int roleFlags = isIFrameOnlyVariant || isImageVariant ? C.ROLE_FLAG_TRICK_PLAY : 0;
+        int peakBitrate =
+            isImageVariant
+                ? parseOptionalIntAttr(line, REGEX_BANDWIDTH, Format.NO_VALUE, matcherCache)
+                : parseIntAttr(line, REGEX_BANDWIDTH, matcherCache);
         int averageBitrate = parseOptionalIntAttr(line, REGEX_AVERAGE_BANDWIDTH, -1, matcherCache);
         String videoRange =
             parseOptionalStringAttr(line, REGEX_VIDEO_RANGE, variableDefinitions, matcherCache);
+        @Nullable
         String codecs =
             parseOptionalStringAttr(line, REGEX_CODECS, variableDefinitions, matcherCache);
+        @Nullable
+        String imageSampleMimeType = isImageVariant ? MimeTypes.getMediaMimeType(codecs) : null;
+        if (isImageVariant
+            && (peakBitrate == Format.NO_VALUE
+                || !MimeTypes.IMAGE_JPEG.equals(imageSampleMimeType))) {
+          // Image Media Playlist v0.4 requires clients to ignore invalid variants and unsupported
+          // image codecs.
+          continue;
+        }
         String supplementalCodecsStrings =
             parseOptionalStringAttr(
                 line, REGEX_SUPPLEMENTAL_CODECS, variableDefinitions, matcherCache);
@@ -567,6 +589,9 @@ public final class HlsPlaylistParser implements ParsingLoadable.Parser<HlsPlayli
           width = Format.NO_VALUE;
           height = Format.NO_VALUE;
         }
+        if (isImageVariant && (width == Format.NO_VALUE || height == Format.NO_VALUE)) {
+          continue;
+        }
         float frameRate = Format.NO_VALUE;
         String frameRateString =
             parseOptionalStringAttr(line, REGEX_FRAME_RATE, variableDefinitions, matcherCache);
@@ -599,6 +624,14 @@ public final class HlsPlaylistParser implements ParsingLoadable.Parser<HlsPlayli
           uri =
               UriUtil.resolveToUri(
                   baseUri, parseStringAttr(line, REGEX_URI, variableDefinitions, matcherCache));
+        } else if (isImageVariant) {
+          @Nullable
+          String uriString =
+              parseOptionalStringAttr(line, REGEX_URI, variableDefinitions, matcherCache);
+          if (uriString == null) {
+            continue;
+          }
+          uri = UriUtil.resolveToUri(baseUri, uriString);
         } else if (!iterator.hasNext()) {
           throw ParserException.createForMalformedManifest(
               "#EXT-X-STREAM-INF must be followed by another line", /* cause= */ null);
@@ -607,11 +640,14 @@ public final class HlsPlaylistParser implements ParsingLoadable.Parser<HlsPlayli
           line = replaceVariableReferences(iterator.next(), variableDefinitions, matcherCache);
           uri = UriUtil.resolveToUri(baseUri, line);
         }
+        // Apply this after validation so discarded image variants have no side effects.
+        noClosedCaptions |= hasNoClosedCaptions;
 
         Format format =
             new Format.Builder()
-                .setId(variants.size())
+                .setId(isImageVariant ? imageVariants.size() : variants.size())
                 .setContainerMimeType(MimeTypes.APPLICATION_M3U8)
+                .setSampleMimeType(imageSampleMimeType)
                 .setCodecs(codecs)
                 .setAverageBitrate(averageBitrate)
                 .setPeakBitrate(peakBitrate)
@@ -632,7 +668,11 @@ public final class HlsPlaylistParser implements ParsingLoadable.Parser<HlsPlayli
                 closedCaptionsGroupId,
                 pathwayId,
                 stableVariantId);
-        variants.add(variant);
+        if (isImageVariant) {
+          imageVariants.add(variant);
+        } else {
+          variants.add(variant);
+        }
         @Nullable ArrayList<VariantInfo> variantInfosForUrl = urlToVariantInfos.get(uri);
         if (variantInfosForUrl == null) {
           variantInfosForUrl = new ArrayList<>();
@@ -647,6 +687,15 @@ public final class HlsPlaylistParser implements ParsingLoadable.Parser<HlsPlayli
                 subtitlesGroupId,
                 closedCaptionsGroupId));
       }
+    }
+
+    // Keep an audio/video variant first so image playlists don't become the playback timeline's
+    // primary playlist when an image tag appears before the regular stream variants.
+    for (int i = 0; i < imageVariants.size(); i++) {
+      Variant imageVariant = imageVariants.get(i);
+      variants.add(
+          imageVariant.copyWithFormat(
+              imageVariant.format.buildUpon().setId(variants.size()).build()));
     }
 
     // TODO: Don't deduplicate variants by URL.
@@ -852,6 +901,7 @@ public final class HlsPlaylistParser implements ParsingLoadable.Parser<HlsPlayli
       Uri playlistUri,
       MatcherCache matcherCache)
       throws IOException {
+    boolean hasImagesOnlyTag = false;
     String baseUri = playlistUri.toString();
     @HlsMediaPlaylist.PlaylistType int playlistType = HlsMediaPlaylist.PLAYLIST_TYPE_UNKNOWN;
     long startOffsetUs = C.TIME_UNSET;
@@ -871,6 +921,7 @@ public final class HlsPlaylistParser implements ParsingLoadable.Parser<HlsPlayli
     @Nullable Part preloadPart = null;
     List<RenditionReport> renditionReports = new ArrayList<>();
     List<String> tags = new ArrayList<>();
+    SparseArray<String> segmentIndexToImageInfoTag = new SparseArray<>();
     LinkedHashMap<String, Interstitial.Builder> interstitialBuilderMap = new LinkedHashMap<>();
 
     long segmentDurationUs = 0;
@@ -888,6 +939,7 @@ public final class HlsPlaylistParser implements ParsingLoadable.Parser<HlsPlayli
     boolean isIFrameOnly = false;
     long segmentMediaSequence = 0;
     boolean hasGapTag = false;
+    @Nullable String imageInfoTag = null;
     HlsMediaPlaylist.ServerControl serverControl =
         new HlsMediaPlaylist.ServerControl(
             /* skipUntilUs= */ C.TIME_UNSET,
@@ -922,6 +974,10 @@ public final class HlsPlaylistParser implements ParsingLoadable.Parser<HlsPlayli
         }
       } else if (line.equals(TAG_IFRAME)) {
         isIFrameOnly = true;
+      } else if (line.equals(TAG_IMAGES_ONLY)) {
+        hasImagesOnlyTag = true;
+      } else if (line.startsWith(TAG_TILES)) {
+        imageInfoTag = replaceVariableReferences(line, variableDefinitions, matcherCache);
       } else if (line.startsWith(TAG_START)) {
         startOffsetUs =
             (long) (parseDoubleAttr(line, REGEX_TIME_OFFSET, matcherCache) * C.MICROS_PER_SECOND);
@@ -1463,6 +1519,9 @@ public final class HlsPlaylistParser implements ParsingLoadable.Parser<HlsPlayli
           }
         }
 
+        if (imageInfoTag != null) {
+          segmentIndexToImageInfoTag.put(segments.size(), imageInfoTag);
+        }
         segments.add(
             new Segment(
                 segmentUri,
@@ -1488,6 +1547,19 @@ public final class HlsPlaylistParser implements ParsingLoadable.Parser<HlsPlayli
         }
         segmentByteRangeLength = C.LENGTH_UNSET;
         hasGapTag = false;
+        imageInfoTag = null;
+      }
+    }
+
+    if (hasImagesOnlyTag) {
+      for (int i = 0; i < segmentIndexToImageInfoTag.size(); i++) {
+        int segmentIndex = segmentIndexToImageInfoTag.keyAt(i);
+        segments.set(
+            segmentIndex,
+            segments
+                .get(segmentIndex)
+                .copyWithImageInfo(
+                    parseImageInfo(segmentIndexToImageInfoTag.valueAt(i), matcherCache)));
       }
     }
 
@@ -1561,6 +1633,39 @@ public final class HlsPlaylistParser implements ParsingLoadable.Parser<HlsPlayli
       playlistSchemeDatas[i] = schemeDatas[i].copyWithData(null);
     }
     return new DrmInitData(encryptionScheme, playlistSchemeDatas);
+  }
+
+  private static HlsMediaPlaylist.ImageInfo parseImageInfo(String line, MatcherCache matcherCache)
+      throws ParserException {
+    String resolution =
+        parseStringAttr(line, REGEX_RESOLUTION, Collections.emptyMap(), matcherCache);
+    String layout = parseStringAttr(line, REGEX_LAYOUT, Collections.emptyMap(), matcherCache);
+    String[] tileWidthAndHeight = Util.split(resolution, "x");
+    String[] columnsAndRows = Util.split(layout, "x");
+    int tileWidth;
+    int tileHeight;
+    int tileCountHorizontal;
+    int tileCountVertical;
+    long tileDurationUs;
+    try {
+      tileWidth = Integer.parseInt(tileWidthAndHeight[0]);
+      tileHeight = Integer.parseInt(tileWidthAndHeight[1]);
+      tileCountHorizontal = Integer.parseInt(columnsAndRows[0]);
+      tileCountVertical = Integer.parseInt(columnsAndRows[1]);
+      tileDurationUs = parseTimeSecondsToUs(line, REGEX_ATTR_DURATION, matcherCache);
+    } catch (NumberFormatException e) {
+      throw ParserException.createForMalformedManifest("Invalid #EXT-X-TILES attribute", e);
+    }
+    if (tileWidth <= 0
+        || tileHeight <= 0
+        || tileCountHorizontal <= 0
+        || tileCountVertical <= 0
+        || tileDurationUs <= 0) {
+      throw ParserException.createForMalformedManifest(
+          "Invalid #EXT-X-TILES attribute", /* cause= */ null);
+    }
+    return new HlsMediaPlaylist.ImageInfo(
+        tileWidth, tileHeight, tileCountHorizontal, tileCountVertical, tileDurationUs);
   }
 
   @Nullable
@@ -1876,6 +1981,7 @@ public final class HlsPlaylistParser implements ParsingLoadable.Parser<HlsPlayli
         throw new NoSuchElementException();
       }
     }
+
   }
 
   private static final class MatcherCache extends LinkedHashMap<Pattern, Matcher> {

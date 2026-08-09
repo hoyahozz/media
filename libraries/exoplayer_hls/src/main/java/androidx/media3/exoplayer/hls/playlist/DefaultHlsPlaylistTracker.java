@@ -25,6 +25,7 @@ import android.net.Uri;
 import android.os.Handler;
 import androidx.annotation.Nullable;
 import androidx.media3.common.C;
+import androidx.media3.common.MimeTypes;
 import androidx.media3.common.ParserException;
 import androidx.media3.common.util.SystemClock;
 import androidx.media3.common.util.UnstableApi;
@@ -429,6 +430,8 @@ public final class DefaultHlsPlaylistTracker
       redundantGroupListCreationError = e;
       return;
     }
+    List<HlsRedundantGroup> primaryEligibleVariantRedundantGroups =
+        getPrimaryEligibleVariantRedundantGroups();
     if (this.multivariantPlaylist.contentSteeringInfo != null) {
       ContentSteeringInfo contentSteeringInfo = this.multivariantPlaylist.contentSteeringInfo;
       contentSteeringTracker =
@@ -442,11 +445,11 @@ public final class DefaultHlsPlaylistTracker
       String initialPathwayId =
           contentSteeringInfo.pathwayId != null
               ? contentSteeringInfo.pathwayId
-              : variantRedundantGroups.get(0).getCurrentPathwayId();
+              : primaryEligibleVariantRedundantGroups.get(0).getCurrentPathwayId();
       contentSteeringTracker.start(
           contentSteeringInfo.serverUri, initialPathwayId, eventDispatcher);
     }
-    HlsRedundantGroup primaryRedundantGroup = variantRedundantGroups.get(0);
+    HlsRedundantGroup primaryRedundantGroup = primaryEligibleVariantRedundantGroups.get(0);
     primaryMediaPlaylistUrl = primaryRedundantGroup.getCurrentPlaylistUrl();
     // Add a temporary playlist listener for loading the first primary playlist.
     listeners.add(new FirstPrimaryMediaPlaylistListener());
@@ -521,7 +524,7 @@ public final class DefaultHlsPlaylistTracker
 
   private void maybeSetPrimaryUrl(Uri url, boolean shouldDeferUpdatingPrimaryUrl) {
     if (url.equals(primaryMediaPlaylistUrl)
-        || !isVariantUrl(url)
+        || !isPrimaryEligibleVariantUrl(url)
         || (primaryMediaPlaylistSnapshot != null && primaryMediaPlaylistSnapshot.hasEndTag)) {
       // Ignore if the primary media playlist URL is unchanged, if the media playlist is not
       // referenced directly by a variant, or if the last primary snapshot contains an end tag.
@@ -584,16 +587,41 @@ public final class DefaultHlsPlaylistTracker
     return newPrimaryPlaylistUri;
   }
 
-  /**
-   * Returns whether any of the variants in the multivariant playlist have the specified playlist
-   * URL.
-   */
-  private boolean isVariantUrl(Uri playlistUrl) {
+  /** Returns whether {@code playlistUrl} may be used as the primary playback timeline. */
+  private boolean isPrimaryEligibleVariantUrl(Uri playlistUrl) {
     @Nullable RedundantGroupBundle bundle = redundantGroupBundles.get(playlistUrl);
-    if (bundle != null) {
-      return bundle.isVariantRedundantGroup;
+    if (bundle == null || !bundle.isVariantRedundantGroup) {
+      return false;
     }
-    return false;
+    if (!MimeTypes.isImage(bundle.redundantGroup.groupKey.format.sampleMimeType)) {
+      return true;
+    }
+    ImmutableList<HlsRedundantGroup> variantRedundantGroups =
+        checkNotNull(this.variantRedundantGroups);
+    for (int i = 0; i < variantRedundantGroups.size(); i++) {
+      if (!MimeTypes.isImage(variantRedundantGroups.get(i).groupKey.format.sampleMimeType)) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  /**
+   * Returns non-image variants when available, or all variants for an image-only multivariant
+   * playlist.
+   */
+  private List<HlsRedundantGroup> getPrimaryEligibleVariantRedundantGroups() {
+    ImmutableList<HlsRedundantGroup> variantRedundantGroups =
+        checkNotNull(this.variantRedundantGroups);
+    ImmutableList.Builder<HlsRedundantGroup> nonImageGroups = ImmutableList.builder();
+    for (int i = 0; i < variantRedundantGroups.size(); i++) {
+      HlsRedundantGroup redundantGroup = variantRedundantGroups.get(i);
+      if (!MimeTypes.isImage(redundantGroup.groupKey.format.sampleMimeType)) {
+        nonImageGroups.add(redundantGroup);
+      }
+    }
+    ImmutableList<HlsRedundantGroup> result = nonImageGroups.build();
+    return result.isEmpty() ? variantRedundantGroups : result;
   }
 
   private void createBundles() {
@@ -846,7 +874,7 @@ public final class DefaultHlsPlaylistTracker
     }
 
     private boolean maybeSelectNewPrimaryUrl() {
-      ImmutableList<HlsRedundantGroup> redundantGroups = variantRedundantGroups;
+      List<HlsRedundantGroup> redundantGroups = getPrimaryEligibleVariantRedundantGroups();
       long currentTimeMs = SystemClock.DEFAULT.elapsedRealtime();
       for (int i = 0; i < redundantGroups.size(); i++) {
         HlsRedundantGroup redundantGroup = redundantGroups.get(i);

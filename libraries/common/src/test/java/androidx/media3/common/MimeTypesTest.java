@@ -170,6 +170,7 @@ public final class MimeTypesTest {
     assertThat(MimeTypes.getMediaMimeType("vp8")).isEqualTo(MimeTypes.VIDEO_VP8);
     assertThat(MimeTypes.getMediaMimeType("vp09")).isEqualTo(MimeTypes.VIDEO_VP9);
     assertThat(MimeTypes.getMediaMimeType("vp9")).isEqualTo(MimeTypes.VIDEO_VP9);
+    assertThat(MimeTypes.getMediaMimeType("jpeg")).isEqualTo(MimeTypes.IMAGE_JPEG);
 
     assertThat(MimeTypes.getMediaMimeType("ac-3")).isEqualTo(MimeTypes.AUDIO_AC3);
     assertThat(MimeTypes.getMediaMimeType("dac3")).isEqualTo(MimeTypes.AUDIO_AC3);

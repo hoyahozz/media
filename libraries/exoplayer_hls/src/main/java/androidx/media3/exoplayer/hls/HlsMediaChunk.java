@@ -25,6 +25,7 @@ import androidx.media3.common.C;
 import androidx.media3.common.DrmInitData;
 import androidx.media3.common.Format;
 import androidx.media3.common.Metadata;
+import androidx.media3.common.MimeTypes;
 import androidx.media3.common.ParserException;
 import androidx.media3.common.util.ParsableByteArray;
 import androidx.media3.common.util.TimestampAdjuster;
@@ -38,6 +39,7 @@ import androidx.media3.exoplayer.source.chunk.MediaChunk;
 import androidx.media3.exoplayer.upstream.CmcdData;
 import androidx.media3.extractor.DefaultExtractorInput;
 import androidx.media3.extractor.ExtractorInput;
+import androidx.media3.extractor.TrackOutput;
 import androidx.media3.extractor.metadata.id3.Id3Decoder;
 import androidx.media3.extractor.metadata.id3.PrivFrame;
 import com.google.common.base.Ascii;
@@ -110,6 +112,11 @@ import org.checkerframework.checker.nullness.qual.RequiresNonNull;
       @Nullable CmcdData.Factory cmcdDataFactory) {
     // Media segment.
     HlsMediaPlaylist.SegmentBase mediaSegment = segmentBaseHolder.segmentBase;
+    @Nullable HlsMediaPlaylist.ImageInfo imageInfo = null;
+    if (MimeTypes.isImage(format.sampleMimeType)
+        && mediaSegment instanceof HlsMediaPlaylist.Segment) {
+      imageInfo = ((HlsMediaPlaylist.Segment) mediaSegment).imageInfo;
+    }
     DataSpec dataSpec =
         new DataSpec.Builder()
             .setUri(UriUtil.resolveToUri(mediaPlaylist.baseUri, mediaSegment.url))
@@ -181,6 +188,7 @@ import org.checkerframework.checker.nullness.qual.RequiresNonNull;
       previousExtractor =
           isSameInitData
                   && isFollowingChunk
+                  && !MimeTypes.isImage(format.sampleMimeType)
                   && !previousChunk.extractorInvalidated
                   && previousChunk.discontinuitySequenceNumber == discontinuitySequenceNumber
               ? previousChunk.extractor
@@ -194,6 +202,7 @@ import org.checkerframework.checker.nullness.qual.RequiresNonNull;
         mediaDataSource,
         dataSpec,
         format,
+        imageInfo,
         mediaSegmentEncrypted,
         initDataSource,
         initDataSpec,
@@ -282,6 +291,8 @@ import org.checkerframework.checker.nullness.qual.RequiresNonNull;
   @Nullable private final DataSource initDataSource;
   @Nullable private final DataSpec initDataSpec;
   @Nullable private final HlsMediaChunkExtractor previousExtractor;
+  @Nullable private final HlsMediaPlaylist.ImageInfo imageInfo;
+  private final Format extractorFormat;
 
   private final boolean isPrimaryTimestampSource;
   private final boolean hasGapTag;
@@ -314,6 +325,7 @@ import org.checkerframework.checker.nullness.qual.RequiresNonNull;
       DataSource mediaDataSource,
       DataSpec dataSpec,
       Format format,
+      @Nullable HlsMediaPlaylist.ImageInfo imageInfo,
       boolean mediaSegmentEncrypted,
       @Nullable DataSource initDataSource,
       @Nullable DataSpec initDataSpec,
@@ -351,6 +363,17 @@ import org.checkerframework.checker.nullness.qual.RequiresNonNull;
         chunkMediaSequence,
         steeredPathwayId);
     this.mediaSegmentEncrypted = mediaSegmentEncrypted;
+    this.imageInfo = imageInfo;
+    this.extractorFormat =
+        imageInfo == null
+            ? format
+            : format
+                .buildUpon()
+                .setWidth(imageInfo.tileWidth)
+                .setHeight(imageInfo.tileHeight)
+                .setTileCountHorizontal(imageInfo.tileCountHorizontal)
+                .setTileCountVertical(imageInfo.tileCountVertical)
+                .build();
     this.partIndex = partIndex;
     this.publishedDurationUs = isPublished ? endTimeUs - startTimeUs : C.TIME_UNSET;
     this.discontinuitySequenceNumber = discontinuitySequenceNumber;
@@ -505,6 +528,32 @@ import org.checkerframework.checker.nullness.qual.RequiresNonNull;
   private void loadMedia() throws IOException {
     feedDataToExtractor(
         dataSource, dataSpec, mediaSegmentEncrypted, /* initializeTimestampAdjuster= */ true);
+    if (!loadCanceled) {
+      maybeWriteImageTileSamples();
+    }
+  }
+
+  @RequiresNonNull("output")
+  private void maybeWriteImageTileSamples() {
+    if (imageInfo == null
+        || (imageInfo.tileCountHorizontal <= 1 && imageInfo.tileCountVertical <= 1)) {
+      return;
+    }
+    @Nullable TrackOutput trackOutput = output.getTrackOutputByType(C.TRACK_TYPE_IMAGE);
+    if (trackOutput == null) {
+      return;
+    }
+    int tileCount = imageInfo.tileCountHorizontal * imageInfo.tileCountVertical;
+    long segmentDurationUs = endTimeUs - startTimeUs;
+    for (int i = 1; i < tileCount; i++) {
+      long tileStartTimeUs = i * imageInfo.tileDurationUs;
+      if (tileStartTimeUs >= segmentDurationUs) {
+        break;
+      }
+      trackOutput.sampleData(new ParsableByteArray(), /* length= */ 0);
+      trackOutput.sampleMetadata(
+          tileStartTimeUs, /* flags= */ 0, /* size= */ 0, /* offset= */ 0, /* cryptoData= */ null);
+    }
   }
 
   /**
@@ -567,7 +616,8 @@ import org.checkerframework.checker.nullness.qual.RequiresNonNull;
       DataSource dataSource, DataSpec dataSpec, boolean initializeTimestampAdjuster)
       throws IOException {
     long bytesToRead = dataSource.open(dataSpec);
-    if (initializeTimestampAdjuster) {
+    boolean isImage = MimeTypes.isImage(extractorFormat.sampleMimeType);
+    if (initializeTimestampAdjuster && !isImage) {
       try {
         timestampAdjuster.sharedInitializeOrWait(
             isPrimaryTimestampSource, startTimeUs, timestampAdjusterInitializationTimeoutMs);
@@ -581,21 +631,26 @@ import org.checkerframework.checker.nullness.qual.RequiresNonNull;
         new DefaultExtractorInput(dataSource, dataSpec.position, bytesToRead);
 
     if (extractor == null) {
-      long id3Timestamp = peekId3PrivTimestamp(extractorInput);
-      extractorInput.resetPeekPosition();
+      long id3Timestamp = C.TIME_UNSET;
+      if (!isImage) {
+        id3Timestamp = peekId3PrivTimestamp(extractorInput);
+        extractorInput.resetPeekPosition();
+      }
 
       extractor =
           previousExtractor != null
               ? previousExtractor.recreate()
               : extractorFactory.createExtractor(
                   dataSpec.uri,
-                  trackFormat,
+                  extractorFormat,
                   muxedCaptionFormats,
                   timestampAdjuster,
                   dataSource.getResponseHeaders(),
                   extractorInput,
                   playerId);
-      if (extractor.isPackedAudioExtractor()) {
+      if (isImage) {
+        output.setSampleOffsetUs(startTimeUs);
+      } else if (extractor.isPackedAudioExtractor()) {
         output.setSampleOffsetUs(
             id3Timestamp != C.TIME_UNSET
                 ? timestampAdjuster.adjustTsTimestamp(id3Timestamp)

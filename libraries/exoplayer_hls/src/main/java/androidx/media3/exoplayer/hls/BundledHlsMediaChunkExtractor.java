@@ -18,13 +18,19 @@ package androidx.media3.exoplayer.hls;
 import static com.google.common.base.Preconditions.checkState;
 
 import androidx.annotation.VisibleForTesting;
+import androidx.media3.common.C;
 import androidx.media3.common.Format;
+import androidx.media3.common.MimeTypes;
 import androidx.media3.common.util.TimestampAdjuster;
 import androidx.media3.common.util.UnstableApi;
 import androidx.media3.extractor.Extractor;
 import androidx.media3.extractor.ExtractorInput;
 import androidx.media3.extractor.ExtractorOutput;
+import androidx.media3.extractor.ForwardingExtractorOutput;
+import androidx.media3.extractor.ForwardingTrackOutput;
 import androidx.media3.extractor.PositionHolder;
+import androidx.media3.extractor.TrackOutput;
+import androidx.media3.extractor.jpeg.JpegExtractor;
 import androidx.media3.extractor.mp3.Mp3Extractor;
 import androidx.media3.extractor.mp4.FragmentedMp4Extractor;
 import androidx.media3.extractor.text.SubtitleParser;
@@ -94,7 +100,33 @@ public final class BundledHlsMediaChunkExtractor implements HlsMediaChunkExtract
 
   @Override
   public void init(ExtractorOutput extractorOutput) {
-    extractor.init(extractorOutput);
+    if (!MimeTypes.isImage(multivariantPlaylistFormat.sampleMimeType)) {
+      extractor.init(extractorOutput);
+      return;
+    }
+    extractor.init(
+        new ForwardingExtractorOutput(extractorOutput) {
+          @Override
+          public TrackOutput track(int id, @C.TrackType int type) {
+            TrackOutput trackOutput = super.track(id, type);
+            if (type != C.TRACK_TYPE_IMAGE) {
+              return trackOutput;
+            }
+            return new ForwardingTrackOutput(trackOutput) {
+              @Override
+              public void format(Format format) {
+                super.format(
+                    format
+                        .buildUpon()
+                        .setWidth(multivariantPlaylistFormat.width)
+                        .setHeight(multivariantPlaylistFormat.height)
+                        .setTileCountHorizontal(multivariantPlaylistFormat.tileCountHorizontal)
+                        .setTileCountVertical(multivariantPlaylistFormat.tileCountVertical)
+                        .build());
+              }
+            };
+          }
+        });
   }
 
   @Override
@@ -142,6 +174,10 @@ public final class BundledHlsMediaChunkExtractor implements HlsMediaChunkExtract
       newExtractorInstance = new Ac4Extractor();
     } else if (extractor instanceof Mp3Extractor) {
       newExtractorInstance = new Mp3Extractor();
+    } else if (extractor instanceof JpegExtractor) {
+      // Image chunks currently create fresh extractors, but keep recreation supported for callers
+      // that explicitly recreate this extractor.
+      newExtractorInstance = new JpegExtractor(JpegExtractor.FLAG_READ_IMAGE);
     } else {
       throw new IllegalStateException(
           "Unexpected extractor type for recreation: " + extractor.getClass().getSimpleName());

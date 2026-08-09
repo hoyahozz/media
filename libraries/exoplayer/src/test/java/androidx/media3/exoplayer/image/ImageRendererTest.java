@@ -404,6 +404,48 @@ public class ImageRendererTest {
   }
 
   @Test
+  public void render_incompleteTiledImages_usesNextBitmapAndReachesEndOfStream() throws Exception {
+    FakeSampleStream fakeSampleStream =
+        createSampleStream(
+            FORMAT_WITH_FOUR_TILES,
+            ImmutableList.of(
+                oneByteSample(/* timeUs= */ 0L, /* flags= */ C.BUFFER_FLAG_KEY_FRAME),
+                emptySample(/* timeUs= */ 100_000L, /* flags= */ 0),
+                emptySample(/* timeUs= */ 200_000L, /* flags= */ 0),
+                oneByteSample(/* timeUs= */ 300_000L, /* flags= */ C.BUFFER_FLAG_KEY_FRAME),
+                emptySample(/* timeUs= */ 400_000L, /* flags= */ 0),
+                emptySample(/* timeUs= */ 500_000L, /* flags= */ 0),
+                END_OF_STREAM_ITEM));
+    fakeSampleStream.writeData(/* startPositionUs= */ 0);
+    renderer.enable(
+        RendererConfiguration.DEFAULT,
+        new Format[] {FORMAT_WITH_FOUR_TILES},
+        fakeSampleStream,
+        /* positionUs= */ 0,
+        /* joining= */ false,
+        /* mayRenderStartOfStream= */ true,
+        /* startPositionUs= */ 0,
+        /* offsetUs= */ 0,
+        new MediaSource.MediaPeriodId(new Object()));
+    renderer.setCurrentStreamFinal();
+
+    StopWatch isEndedStopWatch = new StopWatch(IS_ENDED_TIMEOUT_MESSAGE);
+    long positionUs = 0;
+    while (!renderer.isEnded() && isEndedStopWatch.ensureNotExpired()) {
+      renderer.render(
+          positionUs, /* elapsedRealtimeUs= */ SystemClock.DEFAULT.elapsedRealtime() * 1000);
+      positionUs += 100_000;
+    }
+
+    assertThat(renderedBitmaps).hasSize(6);
+    assertThat(renderedBitmaps.get(2).first).isEqualTo(200_000L);
+    assertThat(renderedBitmaps.get(2).second.getWidth()).isEqualTo(1);
+    assertThat(renderedBitmaps.get(3).first).isEqualTo(300_000L);
+    assertThat(renderedBitmaps.get(3).second.getWidth()).isEqualTo(2);
+    assertThat(renderedBitmaps.get(5).first).isEqualTo(500_000L);
+  }
+
+  @Test
   public void render_tiledImageWithNonZeroStartPosition_rendersToImageOutput() throws Exception {
     FakeSampleStream fakeSampleStream =
         createSampleStream(

@@ -523,6 +523,9 @@ public final class MimeTypes {
       return MimeTypes.APPLICATION_TTML;
     } else if (codec.startsWith("wvtt")) {
       return MimeTypes.TEXT_VTT;
+    } else if (codec.equals("jpeg")) {
+      // "jpeg" is the codec token defined by the HLS Image Media Playlist specification.
+      return MimeTypes.IMAGE_JPEG;
     } else if (codec.contains("cea708")) {
       return MimeTypes.APPLICATION_CEA708;
     } else if (codec.contains("eia608") || codec.contains("cea608")) {

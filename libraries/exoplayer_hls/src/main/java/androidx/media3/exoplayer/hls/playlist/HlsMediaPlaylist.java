@@ -49,6 +49,77 @@ import org.checkerframework.checker.nullness.qual.MonotonicNonNull;
 @UnstableApi
 public final class HlsMediaPlaylist extends HlsPlaylist {
 
+  /** Describes an image grid referenced by a media segment. */
+  public static final class ImageInfo {
+
+    /** The width of each tile in pixels. */
+    public final int tileWidth;
+
+    /** The height of each tile in pixels. */
+    public final int tileHeight;
+
+    /** The number of columns in the image grid. */
+    public final int tileCountHorizontal;
+
+    /** The number of rows in the image grid. */
+    public final int tileCountVertical;
+
+    /** The presentation duration of each tile, in microseconds. */
+    public final long tileDurationUs;
+
+    /** Creates an instance. */
+    public ImageInfo(
+        int tileWidth,
+        int tileHeight,
+        int tileCountHorizontal,
+        int tileCountVertical,
+        long tileDurationUs) {
+      this.tileWidth = tileWidth;
+      this.tileHeight = tileHeight;
+      this.tileCountHorizontal = tileCountHorizontal;
+      this.tileCountVertical = tileCountVertical;
+      this.tileDurationUs = tileDurationUs;
+    }
+
+    @Override
+    public boolean equals(@Nullable Object o) {
+      if (this == o) {
+        return true;
+      }
+      if (!(o instanceof ImageInfo)) {
+        return false;
+      }
+      ImageInfo that = (ImageInfo) o;
+      return tileWidth == that.tileWidth
+          && tileHeight == that.tileHeight
+          && tileCountHorizontal == that.tileCountHorizontal
+          && tileCountVertical == that.tileCountVertical
+          && tileDurationUs == that.tileDurationUs;
+    }
+
+    @Override
+    public int hashCode() {
+      return Objects.hash(
+          tileWidth, tileHeight, tileCountHorizontal, tileCountVertical, tileDurationUs);
+    }
+
+    @Override
+    public String toString() {
+      return "ImageInfo{"
+          + "tileWidth="
+          + tileWidth
+          + ", tileHeight="
+          + tileHeight
+          + ", tileCountHorizontal="
+          + tileCountHorizontal
+          + ", tileCountVertical="
+          + tileCountVertical
+          + ", tileDurationUs="
+          + tileDurationUs
+          + '}';
+    }
+  }
+
   /** Server control attributes. */
   public static final class ServerControl {
 
@@ -112,6 +183,13 @@ public final class HlsMediaPlaylist extends HlsPlaylist {
     public final List<Part> parts;
 
     /**
+     * Information from the #EXT-X-TILES tag associated with this segment's image resource, or
+     * {@code null} if it has no grid. Each #EXT-X-TILES tag applies only to the next image
+     * resource, so later resources require another tag.
+     */
+    @Nullable public final ImageInfo imageInfo;
+
+    /**
      * Creates an instance to be used as init segment.
      *
      * @param uri See {@link #url}.
@@ -139,7 +217,8 @@ public final class HlsMediaPlaylist extends HlsPlaylist {
           byteRangeOffset,
           byteRangeLength,
           /* hasGapTag= */ false,
-          /* parts= */ ImmutableList.of());
+          /* parts= */ ImmutableList.of(),
+          /* imageInfo= */ null);
     }
 
     /**
@@ -173,6 +252,56 @@ public final class HlsMediaPlaylist extends HlsPlaylist {
         long byteRangeLength,
         boolean hasGapTag,
         List<Part> parts) {
+      this(
+          url,
+          initializationSegment,
+          title,
+          durationUs,
+          relativeDiscontinuitySequence,
+          relativeStartTimeUs,
+          drmInitData,
+          fullSegmentEncryptionKeyUri,
+          encryptionIV,
+          byteRangeOffset,
+          byteRangeLength,
+          hasGapTag,
+          parts,
+          /* imageInfo= */ null);
+    }
+
+    /**
+     * Creates an instance.
+     *
+     * @param url See {@link #url}.
+     * @param initializationSegment See {@link #initializationSegment}.
+     * @param title See {@link #title}.
+     * @param durationUs See {@link #durationUs}.
+     * @param relativeDiscontinuitySequence See {@link #relativeDiscontinuitySequence}.
+     * @param relativeStartTimeUs See {@link #relativeStartTimeUs}.
+     * @param drmInitData See {@link #drmInitData}.
+     * @param fullSegmentEncryptionKeyUri See {@link #fullSegmentEncryptionKeyUri}.
+     * @param encryptionIV See {@link #encryptionIV}.
+     * @param byteRangeOffset See {@link #byteRangeOffset}.
+     * @param byteRangeLength See {@link #byteRangeLength}.
+     * @param hasGapTag See {@link #hasGapTag}.
+     * @param parts See {@link #parts}.
+     * @param imageInfo See {@link #imageInfo}.
+     */
+    public Segment(
+        String url,
+        @Nullable Segment initializationSegment,
+        String title,
+        long durationUs,
+        int relativeDiscontinuitySequence,
+        long relativeStartTimeUs,
+        @Nullable DrmInitData drmInitData,
+        @Nullable String fullSegmentEncryptionKeyUri,
+        @Nullable String encryptionIV,
+        long byteRangeOffset,
+        long byteRangeLength,
+        boolean hasGapTag,
+        List<Part> parts,
+        @Nullable ImageInfo imageInfo) {
       super(
           url,
           initializationSegment,
@@ -187,6 +316,7 @@ public final class HlsMediaPlaylist extends HlsPlaylist {
           hasGapTag);
       this.title = title;
       this.parts = ImmutableList.copyOf(parts);
+      this.imageInfo = imageInfo;
     }
 
     public Segment copyWith(long relativeStartTimeUs, int relativeDiscontinuitySequence) {
@@ -210,7 +340,26 @@ public final class HlsMediaPlaylist extends HlsPlaylist {
           byteRangeOffset,
           byteRangeLength,
           hasGapTag,
-          updatedParts);
+          updatedParts,
+          imageInfo);
+    }
+
+    Segment copyWithImageInfo(ImageInfo imageInfo) {
+      return new Segment(
+          url,
+          initializationSegment,
+          title,
+          durationUs,
+          relativeDiscontinuitySequence,
+          relativeStartTimeUs,
+          drmInitData,
+          fullSegmentEncryptionKeyUri,
+          encryptionIV,
+          byteRangeOffset,
+          byteRangeLength,
+          hasGapTag,
+          parts,
+          imageInfo);
     }
   }
 

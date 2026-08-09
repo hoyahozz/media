@@ -27,6 +27,7 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 
 import android.content.Context;
+import android.graphics.Bitmap;
 import android.graphics.SurfaceTexture;
 import android.net.Uri;
 import android.view.Surface;
@@ -41,6 +42,7 @@ import androidx.media3.exoplayer.ExoPlayer;
 import androidx.media3.exoplayer.SeekParameters;
 import androidx.media3.exoplayer.analytics.AnalyticsListener;
 import androidx.media3.exoplayer.hls.HlsMediaSource;
+import androidx.media3.exoplayer.image.ImageOutput;
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory;
 import androidx.media3.exoplayer.source.LoadEventInfo;
 import androidx.media3.exoplayer.source.MediaLoadData;
@@ -59,6 +61,7 @@ import com.google.common.collect.ImmutableSet;
 import com.google.common.collect.Lists;
 import java.io.IOException;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.Ignore;
 import org.junit.Rule;
 import org.junit.Test;
@@ -74,6 +77,40 @@ public final class HlsPlaybackTest {
   @Rule
   public ShadowMediaCodecConfig mediaCodecConfig =
       ShadowMediaCodecConfig.withAllDefaultSupportedCodecs();
+
+  @Test
+  public void imagePlaylistWithIncompleteGrid_reachesEndOfStream() throws Exception {
+    Context applicationContext = ApplicationProvider.getApplicationContext();
+    FakeClock clock = new FakeClock(/* isAutoAdvancing= */ true);
+    CapturingRenderersFactory capturingRenderersFactory =
+        new CapturingRenderersFactory(applicationContext, clock);
+    ExoPlayer player =
+        new ExoPlayer.Builder(applicationContext, capturingRenderersFactory)
+            .setClock(clock)
+            .build();
+    AtomicInteger outputImageCount = new AtomicInteger();
+    player.setImageOutput(
+        new ImageOutput() {
+          @Override
+          public void onImageAvailable(long presentationTimeUs, Bitmap bitmap) {
+            outputImageCount.incrementAndGet();
+          }
+
+          @Override
+          public void onDisabled() {
+            // Do nothing.
+          }
+        });
+
+    player.setMediaItem(
+        MediaItem.fromUri("asset:///media/hls/image-grid-incomplete/master.m3u8"));
+    player.prepare();
+    player.play();
+    advance(player).untilState(Player.STATE_ENDED);
+    player.release();
+
+    assertThat(outputImageCount.get()).isEqualTo(7);
+  }
 
   @Test
   public void webvttStandaloneSubtitlesFile() throws Exception {
